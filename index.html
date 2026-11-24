@@ -3863,6 +3863,7 @@ else self.GwentBot3 = { makeBot3 };
   // 테스트·디버그용 훅
   window.__gwent = { app, H, render, playFx, heroEntrance, doAct, C, E, STAGES, proceed, bot, DEFS, startMatch, stepFor, enemyFor, describe };
   app.st = null; render();
+  try { if (window.GwentNative) window.GwentNative.ready(); } catch (e) { /* 앱 밖(브라우저)에서는 없음 */ } // 앱에게 "게임이 정상으로 떴다"고 알린다
   GwentArt.load(() => { if (app.view !== 'battle') render(); else { render(); } });
 })();
 
