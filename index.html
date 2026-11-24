@@ -1748,7 +1748,7 @@ const TEMPER = {
   normal: { passLead: 6, passScore: 2.5, concede: 11, catch: 0.8 },
   cautious: { passLead: 4, passScore: 4, concede: 8, catch: 0.65 },
 };
-function makeBot(E, DEFS, level, temper, look, fac) { // look=true: 한 수 앞의 준비(진법·날씨·희생 등 다음 수에서 터지는 효과)까지 값으로 친다 — 세력 기믹을 쓰는 적 AI용
+function makeBot(E, DEFS, level, temper, look) { // look=true: 한 수 앞의 준비(진법·날씨·희생 등 다음 수에서 터지는 효과)까지 값으로 친다 — 세력 기믹을 쓰는 적 AI용
   const T = Object.assign({}, TEMPER[temper || 'normal'] || TEMPER.normal);
   const D = (c) => DEFS[c.id];
   const cardValue = (c) => {
@@ -1756,32 +1756,9 @@ function makeBot(E, DEFS, level, temper, look, fac) { // look=true: 한 수 앞�
     const li = E.lvInfo(d, c.lv); let v = li.p;
     if (d.abilities.length) v += 2; if (d.hero) v += 3; return v;
   };
-  // ── 세력 성향(무림맹): 같은 줄에 합공·합벽·호법 카드를 쌓아 올리는 운영
-  const MB = fac === 'murimmaeng'; const MBX = (typeof process !== 'undefined' && process.env && process.env.MBX) ? +process.env.MBX : 7; // 시험용: 1=멀리건 2=쌓기 4=배수 보류
-  const mbCore = (d) => !!(d.syn || d.pairs || d.muster || d.mentor || d.flag || d.formation || d.moraleTag || d.perAlly || (d.nab && d.nab.type === 'chain'));
-  const mbMult = (d) => !!(d.mentor || d.flag || d.formation || (d.fx && d.fx.order));
-  const synN = (S, p, row) => S.players[p].board[row].filter((c) => D(c).syn).length;
-  function mbBonus(S, T, p, a, card) { // 이 수를 둔 뒤 상태 T 기준의 가산점(+면 좋은 수)
-    if (!card) return 0; const d = D(card); if (d.kind !== 'unit' || d.hero) return 0;
-    const row = a.row || (d.row === 'agile' ? 'close' : d.row === 'any' ? 'close' : d.row);
-    const hand = S.players[p].hand.filter((c) => c.uid !== card.uid);
-    const handSyn = hand.filter((c) => D(c).syn).length;
-    let b = 0;
-    if ((MBX & 2) && (d.syn || d.pairs || d.moraleTag)) { // 합공류는 이미 줄에 같은 패가 많은 곳에 쌓는다(앞으로 올 카드 몫까지 키운다)
-      const here = Math.min(5, synN(T, p, row) - (d.syn ? 1 : 0));
-      const best = Math.max(...['close', 'ranged', 'siege'].map((r) => synN(T, p, r)));
-      b += here * 0.45 + (synN(T, p, row) >= best ? 0.8 : -0.8);
-    }
-    if ((MBX & 4) && mbMult(d)) { // 사부·깃발·진법·군령 같은 배수 카드는 줄이 갖춰진 뒤에 낸다(아직 부를 합공 카드가 손에 있으면 아낀다)
-      const n = synN(T, p, row);
-      if (n < 2 && handSyn >= 2) b -= 3 - n;
-      else if (n >= 3) b += 1.5;
-    }
-    return b;
-  }
   function mulligan(S, p) {
     const P = S.players[p];
-    const ranked = P.hand.map((c) => ({ c, v: cardValue(c) })).filter((x) => x.v <= 4 && D(x.c).kind === 'unit' && !D(x.c).abilities.length && !(MB && (MBX & 1) && mbCore(D(x.c))))
+    const ranked = P.hand.map((c) => ({ c, v: cardValue(c) })).filter((x) => x.v <= 4 && D(x.c).kind === 'unit' && !D(x.c).abilities.length)
       .sort((a, b) => a.v - b.v).slice(0, P.mulls);
     return { type: 'mulligan', uids: ranked.map((x) => x.c.uid) };
   }
@@ -1834,7 +1811,6 @@ function makeBot(E, DEFS, level, temper, look, fac) { // look=true: 한 수 앞�
       // 영웅·최고 카드는 결정적인 순간(마지막 젬, 3라운드, 상대가 패스한 뒤 이길 때)에 아낀다
       if (card && D(card).hero && !decisiveNow && !opp.passed) cost += 6;
       let score = (after - before) - cost;
-      if (MB) score += mbBonus(S, T, p, a, card);
       if (look && card) score += 0.55 * followUp(T, p, S.round); // 이 수를 둔 뒤 내 다음 수가 얼마나 좋아지는가(상대가 패스했다고 보고)
       evals.push({ a, after, cv: card ? cardValue(card) : 4 });
       if (!best || score > best.score) best = { a, score, after };
@@ -1876,7 +1852,7 @@ else self.GwentBot = { makeBot, TEMPER };
 function makeBot3(E, DEFS, makeBot, opts) {
   opts = opts || {};
   const R = opts.rollouts || 8, K = opts.cands || 4;
-  const l2 = makeBot(E, DEFS, 2, opts.temper || 'normal', opts.look, opts.fac);
+  const l2 = makeBot(E, DEFS, 2, opts.temper || 'normal', opts.look);
   const rollPolicy = [makeBot(E, DEFS, 2, 'normal'), makeBot(E, DEFS, 2, opts.oppTemper || 'normal', opts.look)];
   const D = (c) => DEFS[c.id];
   function determinize(T, p) { // 상대 비공개 정보(패+덱 순서)를 무작위로 재배치
@@ -2607,13 +2583,13 @@ else self.GwentBot3 = { makeBot3 };
   const AI = { l3From: 20, r0: 6, r1: 12, cands0: 4, cands1: 6 }; // 1~19단계는 L2, 이후 L3
   function aiFor(stage, step, params) {
     const Q = Object.assign({}, AI, params || {});
-    if (step < Q.l3From) return { level: 2, temper: 'normal', look: Q.look, fac: stage.faction };
+    if (step < Q.l3From) return { level: 2, temper: 'normal', look: Q.look };
     const f = Math.min(1, (step - Q.l3From) / (N - Q.l3From));
-    return { level: 3, temper: 'normal', look: Q.look, fac: stage.faction, rollouts: Math.round(Q.r0 + (Q.r1 - Q.r0) * f), cands: Math.round(Q.cands0 + (Q.cands1 - Q.cands0) * f) };
+    return { level: 3, temper: 'normal', look: Q.look, rollouts: Math.round(Q.r0 + (Q.r1 - Q.r0) * f), cands: Math.round(Q.cands0 + (Q.cands1 - Q.cands0) * f) };
   }
   function makeAI(E, DEFS, spec, GB, GB3) {
-    if (spec.level === 3) return GB3.makeBot3(E, DEFS, GB.makeBot, { rollouts: spec.rollouts, cands: spec.cands, temper: spec.temper, look: spec.look, fac: spec.fac });
-    return GB.makeBot(E, DEFS, 2, spec.temper, spec.look, spec.fac);
+    if (spec.level === 3) return GB3.makeBot3(E, DEFS, GB.makeBot, { rollouts: spec.rollouts, cands: spec.cands, temper: spec.temper, look: spec.look });
+    return GB.makeBot(E, DEFS, 2, spec.temper, spec.look);
   }
   const KW = { medic: 2.5, morale: 2, horn: 3, spy: 3, scorch: 1.5, seal: 1.5, ambush: 2.5, any: 1, blood: 1, burst: 2, revive: 3 };
 
