@@ -1748,7 +1748,7 @@ const TEMPER = {
   normal: { passLead: 6, passScore: 2.5, concede: 11, catch: 0.8 },
   cautious: { passLead: 4, passScore: 4, concede: 8, catch: 0.65 },
 };
-function makeBot(E, DEFS, level, temper, look) { // look=true: 한 수 앞의 준비(진법·날씨·희생 등 다음 수에서 터지는 효과)까지 값으로 친다 — 세력 기믹을 쓰는 적 AI용
+function makeBot(E, DEFS, level, temper, look, fac) { // look=true: 한 수 앞의 준비(진법·날씨·희생 등 다음 수에서 터지는 효과)까지 값으로 친다 — 세력 기믹을 쓰는 적 AI용
   const T = Object.assign({}, TEMPER[temper || 'normal'] || TEMPER.normal);
   const D = (c) => DEFS[c.id];
   const cardValue = (c) => {
@@ -1756,9 +1756,32 @@ function makeBot(E, DEFS, level, temper, look) { // look=true: 한 수 앞의 �
     const li = E.lvInfo(d, c.lv); let v = li.p;
     if (d.abilities.length) v += 2; if (d.hero) v += 3; return v;
   };
+  // ── 세력 성향(무림맹): 같은 줄에 합공·합벽·호법 카드를 쌓아 올리는 운영
+  const MB = fac === 'murimmaeng'; const MBX = (typeof process !== 'undefined' && process.env && process.env.MBX) ? +process.env.MBX : 7; // 시험용: 1=멀리건 2=쌓기 4=배수 보류
+  const mbCore = (d) => !!(d.syn || d.pairs || d.muster || d.mentor || d.flag || d.formation || d.moraleTag || d.perAlly || (d.nab && d.nab.type === 'chain'));
+  const mbMult = (d) => !!(d.mentor || d.flag || d.formation || (d.fx && d.fx.order));
+  const synN = (S, p, row) => S.players[p].board[row].filter((c) => D(c).syn).length;
+  function mbBonus(S, T, p, a, card) { // 이 수를 둔 뒤 상태 T 기준의 가산점(+면 좋은 수)
+    if (!card) return 0; const d = D(card); if (d.kind !== 'unit' || d.hero) return 0;
+    const row = a.row || (d.row === 'agile' ? 'close' : d.row === 'any' ? 'close' : d.row);
+    const hand = S.players[p].hand.filter((c) => c.uid !== card.uid);
+    const handSyn = hand.filter((c) => D(c).syn).length;
+    let b = 0;
+    if ((MBX & 2) && (d.syn || d.pairs || d.moraleTag)) { // 합공류는 이미 줄에 같은 패가 많은 곳에 쌓는다(앞으로 올 카드 몫까지 키운다)
+      const here = Math.min(5, synN(T, p, row) - (d.syn ? 1 : 0));
+      const best = Math.max(...['close', 'ranged', 'siege'].map((r) => synN(T, p, r)));
+      b += here * 0.45 + (synN(T, p, row) >= best ? 0.8 : -0.8);
+    }
+    if ((MBX & 4) && mbMult(d)) { // 사부·깃발·진법·군령 같은 배수 카드는 줄이 갖춰진 뒤에 낸다(아직 부를 합공 카드가 손에 있으면 아낀다)
+      const n = synN(T, p, row);
+      if (n < 2 && handSyn >= 2) b -= 3 - n;
+      else if (n >= 3) b += 1.5;
+    }
+    return b;
+  }
   function mulligan(S, p) {
     const P = S.players[p];
-    const ranked = P.hand.map((c) => ({ c, v: cardValue(c) })).filter((x) => x.v <= 4 && D(x.c).kind === 'unit' && !D(x.c).abilities.length)
+    const ranked = P.hand.map((c) => ({ c, v: cardValue(c) })).filter((x) => x.v <= 4 && D(x.c).kind === 'unit' && !D(x.c).abilities.length && !(MB && (MBX & 1) && mbCore(D(x.c))))
       .sort((a, b) => a.v - b.v).slice(0, P.mulls);
     return { type: 'mulligan', uids: ranked.map((x) => x.c.uid) };
   }
@@ -1811,6 +1834,7 @@ function makeBot(E, DEFS, level, temper, look) { // look=true: 한 수 앞의 �
       // 영웅·최고 카드는 결정적인 순간(마지막 젬, 3라운드, 상대가 패스한 뒤 이길 때)에 아낀다
       if (card && D(card).hero && !decisiveNow && !opp.passed) cost += 6;
       let score = (after - before) - cost;
+      if (MB) score += mbBonus(S, T, p, a, card);
       if (look && card) score += 0.55 * followUp(T, p, S.round); // 이 수를 둔 뒤 내 다음 수가 얼마나 좋아지는가(상대가 패스했다고 보고)
       evals.push({ a, after, cv: card ? cardValue(card) : 4 });
       if (!best || score > best.score) best = { a, score, after };
@@ -1852,7 +1876,7 @@ else self.GwentBot = { makeBot, TEMPER };
 function makeBot3(E, DEFS, makeBot, opts) {
   opts = opts || {};
   const R = opts.rollouts || 8, K = opts.cands || 4;
-  const l2 = makeBot(E, DEFS, 2, opts.temper || 'normal', opts.look);
+  const l2 = makeBot(E, DEFS, 2, opts.temper || 'normal', opts.look, opts.fac);
   const rollPolicy = [makeBot(E, DEFS, 2, 'normal'), makeBot(E, DEFS, 2, opts.oppTemper || 'normal', opts.look)];
   const D = (c) => DEFS[c.id];
   function determinize(T, p) { // 상대 비공개 정보(패+덱 순서)를 무작위로 재배치
@@ -2583,13 +2607,13 @@ else self.GwentBot3 = { makeBot3 };
   const AI = { l3From: 20, r0: 6, r1: 12, cands0: 4, cands1: 6 }; // 1~19단계는 L2, 이후 L3
   function aiFor(stage, step, params) {
     const Q = Object.assign({}, AI, params || {});
-    if (step < Q.l3From) return { level: 2, temper: 'normal', look: Q.look };
+    if (step < Q.l3From) return { level: 2, temper: 'normal', look: Q.look, fac: stage.faction };
     const f = Math.min(1, (step - Q.l3From) / (N - Q.l3From));
-    return { level: 3, temper: 'normal', look: Q.look, rollouts: Math.round(Q.r0 + (Q.r1 - Q.r0) * f), cands: Math.round(Q.cands0 + (Q.cands1 - Q.cands0) * f) };
+    return { level: 3, temper: 'normal', look: Q.look, fac: stage.faction, rollouts: Math.round(Q.r0 + (Q.r1 - Q.r0) * f), cands: Math.round(Q.cands0 + (Q.cands1 - Q.cands0) * f) };
   }
   function makeAI(E, DEFS, spec, GB, GB3) {
-    if (spec.level === 3) return GB3.makeBot3(E, DEFS, GB.makeBot, { rollouts: spec.rollouts, cands: spec.cands, temper: spec.temper, look: spec.look });
-    return GB.makeBot(E, DEFS, 2, spec.temper, spec.look);
+    if (spec.level === 3) return GB3.makeBot3(E, DEFS, GB.makeBot, { rollouts: spec.rollouts, cands: spec.cands, temper: spec.temper, look: spec.look, fac: spec.fac });
+    return GB.makeBot(E, DEFS, 2, spec.temper, spec.look, spec.fac);
   }
   const KW = { medic: 2.5, morale: 2, horn: 3, spy: 3, scorch: 1.5, seal: 1.5, ambush: 2.5, any: 1, blood: 1, burst: 2, revive: 3 };
 
@@ -2813,8 +2837,33 @@ else self.GwentBot3 = { makeBot3 };
   const app = { st: null, view: 'title', stage: null, m: null, sheet: null, toast: null, cstage: null };
 
   // ── 저장
-  function save() { try { localStorage.setItem(SAVE_KEY, C.serialize(app.st)); } catch (e) { /* 저장소 불가 시 무시 */ } }
+  // 저장: 자동저장 1칸(기존 키 그대로, 예전 세이브 호환) + 수동 슬롯 10칸. 슬롯은 {t, s} 로 시각과 내용을 함께 저장한다.
+  const AUTO_T = 'gwent_auto_t', SLOTS = 10, slotKey = (i) => 'gwent_slot_' + i;
+  function save() { try { localStorage.setItem(SAVE_KEY, C.serialize(app.st)); localStorage.setItem(AUTO_T, String(Date.now())); } catch (e) { /* 저장소 불가 시 무시 */ } }
   function load() { try { const s = localStorage.getItem(SAVE_KEY); return s ? C.deserialize(s) : null; } catch (e) { return null; } }
+  function slotRead(i) { try { const w = JSON.parse(localStorage.getItem(slotKey(i)) || 'null'); if (!w || !w.s) return null; const st = C.deserialize(w.s); return st ? { t: w.t, st } : null; } catch (e) { return null; } }
+  function slotWrite(i, st) { try { localStorage.setItem(slotKey(i), JSON.stringify({ t: Date.now(), s: C.serialize(st) })); return true; } catch (e) { return false; } }
+  function autoRead() { const st = load(); return st ? { t: +localStorage.getItem(AUTO_T) || 0, st } : null; }
+  function slotSummary(x) {
+    if (!x) return '<span class="dim">비어 있음</span>';
+    const d = x.t ? new Date(x.t) : null; const when = d ? (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
+    return '<b>' + Object.keys(x.st.cleared || {}).length + '/' + STAGES.length + ' 격파</b> <span class="dim sm-t">' + esc(((GwentStages.DIFFS[x.st.difficulty || 'normal'] || {}).name) || '') + ' · 카드 ' + (x.st.owned || []).length + '장' + (when ? ' · ' + when : '') + '</span>';
+  }
+  // 백업 코드: 모든 슬롯을 글자 하나로 묶어 복사·붙여넣기 한다
+  function backupCode() {
+    const o = { a: localStorage.getItem(SAVE_KEY), at: localStorage.getItem(AUTO_T), s: [] };
+    for (let i = 0; i < SLOTS; i++) o.s.push(localStorage.getItem(slotKey(i)));
+    return 'GWENTSAVE1:' + btoa(unescape(encodeURIComponent(JSON.stringify(o))));
+  }
+  function backupApply(text) {
+    try {
+      const t = String(text || '').trim(); if (t.indexOf('GWENTSAVE1:') !== 0) return '백업 코드가 아닙니다';
+      const o = JSON.parse(decodeURIComponent(escape(atob(t.slice(11))))); let n = 0;
+      if (o.a && C.deserialize(o.a)) { localStorage.setItem(SAVE_KEY, o.a); if (o.at) localStorage.setItem(AUTO_T, o.at); n++; }
+      (o.s || []).forEach((raw, i) => { if (i >= SLOTS || !raw) return; try { const w = JSON.parse(raw); if (w && w.s && C.deserialize(w.s)) { localStorage.setItem(slotKey(i), raw); n++; } } catch (e) { /* 깨진 칸은 건너뜀 */ } });
+      return n ? n + '칸을 불러왔습니다' : '불러올 저장이 없습니다';
+    } catch (e) { return '백업 코드를 읽지 못했습니다'; }
+  }
   // ── 전체화면 (주소창·하단바를 없애 화면을 넓힌다. 지원하지 않는 브라우저에서는 버튼이 숨는다. 켜 두면 다음 탭 때 다시 켠다)
   const FS_KEY = 'gwent_fs';
   const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
@@ -3048,14 +3097,34 @@ else self.GwentBot3 = { makeBot3 };
   function vTitle() {
     const has = !!load();
     return '<div class="scr"><div class="body"><div style="text-align:right">' + sndBtn() + bgmBtn() + ' ' + fsBtn() + '</div>' + (GwentArt.url('title-logo') ? '<div class="center" style="margin:18px 0 6px"><img alt="검과 패" src="' + GwentArt.url('title-logo') + '" style="width:88%;max-width:420px;filter:drop-shadow(0 6px 14px #000c)"></div>' : '<div class="title" style="margin-top:12px">검과 패</div>') + '<div class="center dim" style="margin-bottom:30px">무림 궨트 · 떠돌이의 길</div>' +
-      (has ? '<button class="pri" style="width:100%;margin-bottom:10px;padding:14px" data-a="continue">이어하기</button>' : '') +
+      (has ? '<button class="pri" style="width:100%;margin-bottom:10px;padding:14px" data-a="continue">이어하기</button>' : '') + '<button style="width:100%;margin-bottom:10px;padding:12px" data-a="slots:title">저장 · 불러오기</button>' +
       (app.pickDiff ? '<div class="box"><b>난이도</b>' + Object.keys(GwentStages.DIFFS).map((k) => '<button style="width:100%;margin-top:8px;padding:12px;text-align:left" data-a="newgame:' + k + '"><b>' + GwentStages.DIFFS[k].name + '</b><br><span class="dim sm-t">' + GwentStages.DIFFS[k].desc + '</span></button>').join('') + '<button class="sm" style="margin-top:8px" data-a="diffcancel">취소</button></div>' : '<button style="width:100%;margin-bottom:10px;padding:14px" data-a="newgame">' + (has ? '새로 시작 (저장 삭제)' : '시작하기') + '</button>') +
       '<div class="box sm-t dim" style="margin-top:24px">규칙은 위쳐 3 궨트를 따릅니다. 3라운드 중 2라운드를 먼저 이기면 승리. 스테이지를 처음 깨면 카드 5장 중 3장을 얻고, 같은 카드를 모아 경지를 올립니다. 정예(1티어)는 4장, 역할(2티어)은 7장, 군세(3티어)는 16장이면 초절정입니다.</div></div></div>';
+  }
+  // ── 화면: 저장 슬롯
+  function vSlots() {
+    const canSave = !!app.st && app.slotFrom !== 'title';
+    let h = '<div class="scr"><div class="hd"><button class="sm" data-a="slotsback">←</button><h1>저장 · 불러오기</h1></div><div class="body">';
+    const a = autoRead();
+    h += '<div class="box"><b>자동저장</b> <span class="dim sm-t">(진행할 때마다 자동으로 덮어씀)</span><div style="margin:6px 0">' + slotSummary(a) + '</div><button class="sm" data-a="slotload:auto" ' + (a ? '' : 'disabled') + '>불러오기</button></div>';
+    for (let i = 0; i < SLOTS; i++) {
+      const x = slotRead(i);
+      h += '<div class="box"><b>슬롯 ' + (i + 1) + '</b><div style="margin:6px 0">' + slotSummary(x) + '</div><div class="act">' +
+        (canSave ? '<button class="sm pri" data-a="slotsave:' + i + '">여기에 저장</button>' : '') +
+        '<button class="sm" data-a="slotload:' + i + '" ' + (x ? '' : 'disabled') + '>불러오기</button><button class="sm" data-a="slotdel:' + i + '" ' + (x ? '' : 'disabled') + '>삭제</button></div></div>';
+    }
+    h += '<div class="box"><b>백업</b> <span class="dim sm-t">폰을 바꾸거나 앱을 지우기 전에 코드를 복사해 메모 앱 등에 보관하세요.</span><div class="act" style="margin-top:8px"><button class="sm" data-a="bkexport">백업 코드 보기·복사</button><button class="sm" data-a="bkimport">백업 코드 붙여넣기</button></div></div></div>';
+    if (app.bk) {
+      h += '<div class="ov list"><div class="box"><b>' + (app.bk.mode === 'export' ? '백업 코드' : '백업 코드 붙여넣기') + '</b><div class="dim sm-t" style="margin:4px 0 8px">' + (app.bk.mode === 'export' ? '아래 글자를 전부 복사해서 보관하세요.' : '복사해 둔 코드를 붙여넣고 [적용]을 누르세요. 같은 칸은 덮어써집니다.') + '</div>' +
+        '<textarea id="bkta" style="width:100%;height:120px;background:#0f0c09;color:var(--ink);border:1px solid var(--line);border-radius:6px;font-size:11px" ' + (app.bk.mode === 'export' ? 'readonly' : '') + '>' + (app.bk.mode === 'export' ? app.bk.code : '') + '</textarea>' +
+        '<div class="act" style="margin-top:8px">' + (app.bk.mode === 'export' ? '<button class="pri grow" data-a="bkcopy">복사</button>' : '<button class="pri grow" data-a="bkapply">적용</button>') + '<button class="grow" data-a="bkclose">닫기</button></div></div></div>';
+    }
+    return h + '</div>';
   }
   // ── 화면: 지도
   function vMap() {
     const st = app.st; const v = C.validateDeck(st); const done = Object.keys(st.cleared).length;
-    let h = '<div class="scr"><div class="hd"><h1>강호행 · ' + done + '/' + STAGES.length + ' <span class="dim sm-t">' + ((GwentStages.DIFFS[st.difficulty || 'normal'] || {}).name || '') + '</span></h1>' + sndBtn() + bgmBtn() + fsBtn(true) + '<button class="sm" data-a="title">나가기</button></div><div class="body">' +
+    let h = '<div class="scr"><div class="hd"><h1>강호행 · ' + done + '/' + STAGES.length + ' <span class="dim sm-t">' + ((GwentStages.DIFFS[st.difficulty || 'normal'] || {}).name || '') + '</span></h1>' + sndBtn() + bgmBtn() + fsBtn(true) + '<button class="sm" data-a="slots:map">저장</button><button class="sm" data-a="title">나가기</button></div><div class="body">' +
       '<div class="box sm-t">다음 도전은 <b>' + Math.min(STAGES.length, done + 1) + '단계</b>입니다. 어느 세력부터 가도 깬 수가 늘수록 적이 강해집니다.</div>';
     for (const f of FAC_ORDER) {
       const list = STAGES.filter((s) => s.faction === f); const n = list.filter((s) => st.cleared[s.id]).length;
@@ -3405,6 +3474,7 @@ else self.GwentBot3 = { makeBot3 };
     let h = '';
     if (app.view === 'title') h = vTitle();
     else if (app.view === 'map') h = vMap();
+    else if (app.view === 'slots') h = vSlots();
     else if (app.view === 'stage') h = vStage();
     else if (app.view === 'collect') h = vCollect() + (app.sheet ? sheetManage(app.sheet.id, app.sheet.lv) : '');
     else if (app.view === 'reward') h = vReward();
@@ -3506,6 +3576,16 @@ else self.GwentBot3 = { makeBot3 };
     newgame(a) { if (!a[1]) { app.pickDiff = true; render(); return; } app.pickDiff = false; app.st = C.newGame((Math.random() * 4294967296) >>> 0); app.st.difficulty = a[1]; C.autoDeck(app.st); save(); app.view = 'map'; render(); },
     diffcancel() { app.pickDiff = false; render(); },
     title() { app.view = 'title'; render(); },
+    slots(a) { app.slotFrom = a[1] || 'map'; app.view = 'slots'; app.bk = null; render(); },
+    slotsback() { app.bk = null; app.view = app.slotFrom === 'title' || !app.st ? 'title' : 'map'; render(); },
+    slotsave(a) { const i = +a[1]; if (slotRead(i) && !confirm('슬롯 ' + (i + 1) + '의 저장을 덮어쓸까요?')) return; if (slotWrite(i, app.st)) toast('슬롯 ' + (i + 1) + '에 저장했습니다'); else toast('저장하지 못했습니다(저장 공간 부족)'); render(); },
+    slotload(a) { const x = a[1] === 'auto' ? autoRead() : slotRead(+a[1]); if (!x) { toast('불러올 수 없습니다'); return; } if (app.st && !confirm('지금 진행을 이 저장으로 바꿀까요? (자동저장도 이 내용으로 바뀝니다)')) return; app.st = x.st; save(); app.view = app.st.pending ? 'reward' : 'map'; app.slotFrom = 'map'; render(); toast('불러왔습니다'); },
+    slotdel(a) { const i = +a[1]; if (!confirm('슬롯 ' + (i + 1) + '을 삭제할까요?')) return; try { localStorage.removeItem(slotKey(i)); } catch (e) { /* 무시 */ } render(); },
+    bkexport() { app.bk = { mode: 'export', code: backupCode() }; render(); },
+    bkimport() { app.bk = { mode: 'import' }; render(); },
+    bkclose() { app.bk = null; render(); },
+    bkcopy() { const t = document.getElementById('bkta'); if (!t) return; t.focus(); t.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (e) { /* 무시 */ } if (!ok && navigator.clipboard) { navigator.clipboard.writeText(t.value).then(() => toast('복사했습니다'), () => toast('길게 눌러 직접 복사하세요')); } else toast(ok ? '복사했습니다' : '길게 눌러 직접 복사하세요'); },
+    bkapply() { const t = document.getElementById('bkta'); const msg = backupApply(t ? t.value : ''); app.bk = null; render(); toast(msg); },
     gravelist() { app.m.graveView = true; render(); },
     graveclose() { app.m.graveView = false; render(); },
     menu() { app.m.menu = !app.m.menu; render(); },
