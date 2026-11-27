@@ -3339,8 +3339,9 @@ else self.GwentBot3 = { makeBot3 };
   // ── 화면: 지도
   function vMap() {
     const st = app.st; const v = C.validateDeck(st); const done = Object.keys(st.cleared).length;
-    let h = '<div class="scr"><div class="hd"><h1>강호행 · ' + done + '/' + STAGES.length + ' <span class="dim sm-t">' + ((GwentStages.DIFFS[st.difficulty || 'normal'] || {}).name || '') + '</span></h1>' + sndBtn() + bgmBtn() + fsBtn(true) + '<button class="sm" data-a="replays:map">다시보기</button><button class="sm" data-a="slots:map">저장</button><button class="sm" data-a="title">나가기</button></div><div class="body">' +
-      '<div class="box sm-t">다음 도전은 <b>' + Math.min(STAGES.length, done + 1) + '단계</b>입니다. 어느 세력부터 가도 깬 수가 늘수록 적이 강해집니다.</div>';
+    let h = '<div class="scr"><div class="hd"><h1>강호행 · ' + done + '/' + STAGES.length + ' <span class="dim sm-t">' + ((GwentStages.DIFFS[st.difficulty || 'normal'] || {}).name || '') + '</span></h1>' + sndBtn() + bgmBtn() + fsBtn(true) + '<button class="sm" data-a="mapdiff">난이도</button><button class="sm" data-a="replays:map">다시보기</button><button class="sm" data-a="slots:map">저장</button><button class="sm" data-a="title">나가기</button></div><div class="body">' +
+      '<div class="box sm-t">다음 도전은 <b>' + Math.min(STAGES.length, done + 1) + '단계</b>입니다. 어느 세력부터 가도 깬 수가 늘수록 적이 강해집니다.</div>' +
+      (app.mapDiff ? '<div class="box"><b>난이도 바꾸기</b> <span class="dim sm-t">(언제든 바꿀 수 있고 저장은 그대로입니다)</span>' + Object.keys(GwentStages.DIFFS).map((k) => '<button style="width:100%;margin-top:8px;padding:12px;text-align:left' + ((st.difficulty || 'normal') === k ? ';outline:2px solid #c9a24a' : '') + '" data-a="setdiff:' + k + '"><b>' + GwentStages.DIFFS[k].name + ((st.difficulty || 'normal') === k ? ' (지금)' : '') + '</b><br><span class="dim sm-t">' + GwentStages.DIFFS[k].desc + '</span></button>').join('') + '<button class="sm" style="margin-top:8px" data-a="mapdiff">닫기</button></div>' : '');
     for (const f of FAC_ORDER) {
       const list = STAGES.filter((s) => s.faction === f); const n = list.filter((s) => st.cleared[s.id]).length;
       h += '<div class="box" style="margin-top:10px"><b>' + esc(FAC_TITLE[f]) + '</b> <span class="dim sm-t">' + n + '/' + list.length + ' 격파</span></div>';
@@ -3824,6 +3825,8 @@ else self.GwentBot3 = { makeBot3 };
     continue() { app.st = load(); app.view = app.st.pending ? 'reward' : 'map'; render(); },
     newgame(a) { if (!a[1]) { app.pickDiff = true; render(); return; } app.pickDiff = false; app.st = C.newGame((Math.random() * 4294967296) >>> 0); app.st.difficulty = a[1]; C.autoDeck(app.st); save(); app.view = 'map'; render(); },
     diffcancel() { app.pickDiff = false; render(); },
+    mapdiff() { app.mapDiff = !app.mapDiff; render(); },
+    setdiff(a) { if (GwentStages.DIFFS[a[1]] && app.st) { app.st.difficulty = a[1]; app.mapDiff = false; save(); } render(); },
     title() { app.view = 'title'; render(); },
     slots(a) { app.slotFrom = a[1] || 'map'; app.view = 'slots'; app.bk = null; render(); },
     slotsback() { app.bk = null; app.view = app.slotFrom === 'title' || !app.st ? 'title' : 'map'; render(); },
