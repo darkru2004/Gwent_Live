@@ -1776,6 +1776,16 @@ button:disabled{opacity:.35;cursor:default}
         const k = P.deck.findIndex((c) => c.id === id);
         if (k >= 0) { P.hand.push(P.deck.splice(k, 1)[0]); ev(S, { t: 'kwanbo', p: i, id }); }
       }
+      // 기세 3 세력 특기: 무림맹 연전(라운드 승리 시 1장 더) / 혈교 원혼(라운드 패배 시 무덤의 가장 강한 비영웅을 손으로) / 수로채 물때(2·3라운드 항상 후공)
+      for (let i = 0; i < 2; i++) {
+        const P = S.players[i], a = P.aura; if (!a) continue;
+        if (a.winDraw && winner === i) { draw(S, i, 1); ev(S, { t: 'auraDraw', p: i }); }
+        if (a.graveBack && winner === 1 - i) {
+          let bi = -1, bp = -99; P.grave.forEach((g, k) => { const d = D(g); if (d.kind === 'unit' && !d.hero && (d.p || 0) > bp) { bp = d.p || 0; bi = k; } });
+          if (bi >= 0) { const c = P.grave.splice(bi, 1)[0]; P.hand.push(c); ev(S, { t: 'graveBack', p: i, id: c.id }); }
+        }
+        if (a.tide) { S.starter = 1 - i; S.turn = S.starter; ev(S, { t: 'tide', p: i }); }
+      }
       // 임기응변: 2·3라운드 시작 때 1장 교체
       let rm = false;
       for (const P of S.players) if (P.passive === 'mulligan3' && P.hand.length && P.deck.length) { P.mullDone = false; P.mulls = 1; rm = true; }
@@ -2651,6 +2661,31 @@ else self.GwentBot3 = { makeBot3 };
       else if (st.mix) { st.fixed = true; st.plan = { name: '혼성 편성', tieWin: true, note: '두 부대가 섞여 나옵니다. 영웅은 마지막 승부까지 아끼고, 무승부는 천위부의 승리입니다.', kwanbo: {}, r: { 1: { mode: 'front', hold: ['TWH1', 'TWH2', 'TWH3', 'TWH4', 'TWH5', 'TWH6'] }, 2: { ifWon: { mode: 'front', hold: ['TWH1', 'TWH2', 'TWH3', 'TWH4', 'TWH5', 'TWH6'] }, ifLost: { mode: 'all' } }, 3: { mode: 'all' } } }; }
     }
   })();
+  // ── 무림맹·수로채·혈교: 세력별 틀로 계획표를 자동으로 붙인다(덱은 고정). 영웅은 마지막 승부까지, 핵심 카드는 2라운드부터.
+  (function factionPlans() {
+    const F = {
+      murimmaeng: { name: '정면형', key: ['MB08', 'MB07', 'MB24'], counter: ['MB27', 'MB17'],
+        note: '정면으로 싸워 이겨 카드를 더 얻는다. 합공 중심 카드(검로·금강승·대진 수호자)와 영웅은 2라운드부터 낸다.' },
+      suroche: { name: '기습형', key: ['SR20', 'SR04', 'SR27', 'SR26'], counter: ['SR20', 'SR04', 'SR12'],
+        note: '1라운드는 가볍게 맞서고 화공선·물귀신 자객·쾌선은 2라운드부터 쓴다. 영웅은 마지막 승부에 나온다.' },
+      hyeolgyo: { name: '희생형', key: ['HG28', 'HG07', 'HG26', 'HGH3', 'HGH4'], counter: ['HG26', 'HG17'],
+        note: '1라운드에 제물을 바쳐 희생과 무덤을 쌓고, 희생·무덤 수로 커지는 카드와 영웅은 뒤 라운드에 낸다.' },
+    };
+    const ADD_HERO = { 'SR-1': 'SRH4', 'HG-1': 'HGH4', 'HG-6': 'HGH2' }; // 영웅이 없던 덱에 영웅 1장
+    for (const st of STAGES) {
+      const f = F[st.faction]; if (!f || st.plan) continue;
+      if (ADD_HERO[st.id] && st.enemy && !st.enemy.some((c) => c.id === ADD_HERO[st.id])) st.enemy.push({ id: ADD_HERO[st.id], lv: 1 });
+      const src = st.mix ? st.mix.map((id) => STAGES.find((q) => q.id === id)).filter(Boolean) : [st];
+      const ids = [].concat.apply([], src.map((q) => (q.enemy || []).map((c) => c.id)));
+      const heroes = ids.filter((id, i) => /H\d$/.test(id) && ids.indexOf(id) === i);
+      const key = f.key.filter((id) => ids.includes(id));
+      const top = heroes.slice().sort((a, b) => (b === st.hero ? 1 : 0) - (a === st.hero ? 1 : 0))[0];
+      st.fixed = true;
+      st.plan = { name: st.boss ? '총력형' : f.name, tieWin: false, note: (st.boss ? '보스는 영웅을 끝까지 아끼다 마지막 승부에 총동원한다. ' : '') + f.note + ' 내 줄 하나가 20을 넘으면 견제 카드를 바로 꺼낸다.',
+        counter: f.counter.filter((id) => ids.includes(id)), counterAt: 20,
+        r: { 1: { mode: 'front', hold: heroes.concat(key) }, 2: { ifWon: { mode: 'front', hold: top ? [top] : [] }, ifLost: { mode: 'all' } }, 3: { mode: 'all' } } };
+    }
+  })();
   const N = STAGES.length;
   // 혼성 스테이지: 두 스테이지의 카드 구성을 섞는다(복사 한도 안에서)
   function mixEnemy(DEFS, stage) {
@@ -2712,6 +2747,10 @@ else self.GwentBot3 = { makeBot3 };
     const lead = E.total(S, p) - E.total(S, 1 - p);
     const passOk = opp.passed && (lead > 0 || (plan.tieWin && lead === 0));
     const hold = new Set(opp.passed ? [] : (cfg.hold || []));
+    if (plan.counter && plan.counter.length && hold.size) { // 견제: 상대 한 줄이 기준을 넘으면 견제 카드는 아끼지 않는다
+      const mx = Math.max.apply(null, E.ROWS.map((r) => E.rowTotal(S, 1 - p, r)));
+      if (mx >= (plan.counterAt || 20)) for (const id of plan.counter) hold.delete(id);
+    }
     const isCard = (a) => a.type !== 'pass' && a.type !== 'leader';
     let out = acts.filter((a) => !(isCard(a) && a.uid && hold.has((me.hand.find((c) => c.uid === a.uid) || {}).id)));
     if (!opp.passed && (cfg.mode === 'dump' || cfg.mode === 'bait')) {
@@ -2736,11 +2775,13 @@ else self.GwentBot3 = { makeBot3 };
     let lv = step < 12 ? 0 : step < 24 ? 1 : step < 36 ? 2 : 3;
     if (stage.elite) lv += 1; if (stage.boss) lv += 2;
     lv = Math.min(5, lv + ((params && params.aura) || 0));
-    return { lv, mull: lv >= 1 ? 1 : 0, hand: (lv >= 2 ? 1 : 0) + (lv >= 5 ? 1 : 0), kwanbo: lv >= 3 ? stage.plan.kwanbo : undefined, loseDraw: lv >= 4 };
+    const sp = lv >= 3, f = stage.faction;
+    return { lv, mull: lv >= 1 ? 1 : 0, hand: (lv >= 2 ? 1 : 0) + (lv >= 5 ? 1 : 0), loseDraw: lv >= 4,
+      kwanbo: sp && f === 'cheonwi' ? stage.plan.kwanbo : undefined, winDraw: sp && f === 'murimmaeng', tide: sp && f === 'suroche', graveBack: sp && f === 'hyeolgyo' };
   }
   function auraText(a) {
     if (!a || !a.lv) return '';
-    const t = []; if (a.mull) t.push('교체 +' + a.mull); if (a.hand) t.push('시작 손패 +' + a.hand); if (a.kwanbo) t.push('관보(핵심 카드를 2·3라운드에 확보)'); if (a.loseDraw) t.push('라운드를 지면 1장 뽑기');
+    const t = []; if (a.mull) t.push('교체 +' + a.mull); if (a.hand) t.push('시작 손패 +' + a.hand); if (a.kwanbo) t.push('관보(핵심 카드를 2·3라운드에 확보)'); if (a.winDraw) t.push('연전(라운드를 이기면 1장 더)'); if (a.tide) t.push('물때(2·3라운드 항상 후공)'); if (a.graveBack) t.push('원혼(라운드를 지면 무덤의 가장 강한 카드를 손으로)'); if (a.loseDraw) t.push('라운드를 지면 1장 뽑기');
     return t.join(' · ');
   }
   const KW = { medic: 2.5, morale: 2, horn: 3, spy: 3, scorch: 1.5, seal: 1.5, ambush: 2.5, any: 1, blood: 1, burst: 2, revive: 3 };
@@ -3390,7 +3431,7 @@ else self.GwentBot3 = { makeBot3 };
     const v = C.validateDeck(st);
     return '<div class="scr"><div class="hd"><button class="sm" data-a="map">←</button><h1>' + esc(s.name) + '</h1></div><div class="body">' +
       '<div class="box">' + esc(s.story) + '</div>' +
-      '<div class="box sm-t"><b>' + esc(Data.FACTIONS[s.faction].name) + '</b> · ' + esc(passive) + '<br>도전 단계 <b>' + stepFor(st, s) + '</b>/' + STAGES.length + '<br>특수 규칙: ' + esc(s.rule) + '<br>적 덱: 유닛 ' + units.length + '장, 전투력 합 ' + sum + '</div>' + (s.plan ? '<div class="box sm-t"><b>상대의 전략 · ' + esc(s.plan.name) + '</b><br>' + esc(s.plan.note) + '<br><span class="dim">봉쇄된 줄은 그 라운드 동안 전고·사기·합공 같은 버프가 꺼지고 기본 전투력만 남습니다(줄 오른쪽 위에 \'봉쇄\' 표시).</span>' + (function () { const a = GwentStages.auraFor(s, stepFor(st, s), dparams(st)); return a && a.lv ? '<br><b>기세 ' + a.lv + '</b> — ' + esc(GwentStages.auraText(a)) : '<br><b>기세 0</b> — 상대는 같은 조건으로 싸웁니다.'; })() + '</div>' : '') +
+      '<div class="box sm-t"><b>' + esc(Data.FACTIONS[s.faction].name) + '</b> · ' + esc(passive) + '<br>도전 단계 <b>' + stepFor(st, s) + '</b>/' + STAGES.length + '<br>특수 규칙: ' + esc(s.rule) + '<br>적 덱: 유닛 ' + units.length + '장, 전투력 합 ' + sum + '</div>' + (s.plan ? '<div class="box sm-t"><b>상대의 전략 · ' + esc(s.plan.name) + '</b><br>' + esc(s.plan.note) + (s.faction !== 'cheonwi' ? '' : '<br><span class="dim">봉쇄된 줄은 그 라운드 동안 전고·사기·합공 같은 버프가 꺼지고 기본 전투력만 남습니다(줄 오른쪽 위에 \'봉쇄\' 표시).</span>') + (function () { const a = GwentStages.auraFor(s, stepFor(st, s), dparams(st)); return a && a.lv ? '<br><b>기세 ' + a.lv + '</b> — ' + esc(GwentStages.auraText(a)) : '<br><b>기세 0</b> — 상대는 같은 조건으로 싸웁니다.'; })() + '</div>' : '') +
       '<div class="box"><b class="sm-t">핵심 카드</b><div class="grid5" style="margin-top:8px">' + top.map((c) => tile(c.id, c.lv, { size: 'mini' })).join('') + '</div></div>' +
       '<div class="box sm-t"><b>승리 보상</b> ' + (first ? (s.hero ? '<b>영웅 귀순: ' + esc(DEFS[s.hero].name) + '</b> · ' : '') + (s.leaderReward ? '<b>리더: ' + esc(Data.LEADERS[s.leaderReward].name) + '</b> · ' : '') + '카드 5장 중 ' + (Object.keys(app.st.cleared).length < 8 ? 3 : 2) + '장 선택 (리롤 1회) + 투항병 ' + ((s.surrender || []).length > 1 ? '2종 중 1종' : '자동 지급') + '<div class="grid5" style="margin-top:6px;justify-content:flex-start">' + surr + '<span class="dim" style="align-self:center">← 이번에 한해 투항해 오는 카드. 덱에 넣고 새 스테이지를 ' + ((s.surrender[0] && s.surrender[0].need) || 2) + '번 깨면 정식 동료가 됩니다</span></div>' : '이미 격파한 스테이지입니다. 다시 싸워도 보상은 없습니다.') + '</div>' +
       (v.ok ? '' : '<div class="box ng sm-t">덱이 규칙에 맞지 않습니다: ' + esc(v.errs.join(', ')) + '</div>') +
@@ -3504,6 +3545,8 @@ else self.GwentBot3 = { makeBot3 };
       else if (e.t === 'sacrifice') m.log.push(who(e.p) + ': ' + nm(e.id) + ' 희생');
       else if (e.t === 'kwanbo') m.log.push(who(e.p) + ': 관보 → ' + nm(e.id) + ' 확보');
       else if (e.t === 'auraDraw') m.log.push(who(e.p) + ': 기세 — 카드 1장');
+      else if (e.t === 'graveBack') m.log.push(who(e.p) + ': 원혼 → ' + nm(e.id) + ' 회수');
+      else if (e.t === 'tide') m.log.push(who(e.p) + ': 물때 — 이번 라운드 후공');
     }
     if (m.log.length > 40) m.log.splice(0, m.log.length - 40);
   }
